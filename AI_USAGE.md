@@ -36,8 +36,6 @@ El uso de herramientas de inteligencia artificial en este proyecto se limitó **
 
 ## 3. Registro de Uso de IA (Log de Consultas)
 
-> **Formato requerido:** Fecha/Semana | Integrante | Tipo de uso | Qué se consultó y cómo ayudó
-
 | # | Fecha / Semana | Integrante | Tipo de Uso | Qué se consultó y cómo ayudó |
 |---|----------------|------------|-------------|------------------------------|
 | 1 | 2026-10-22 / Semana 0 | [Rodrigo Pino] | **Explicación de conceptos / Cómo empezar** | Entender la estructura general del enunciado: entidades (camión, pala, stockpile, tramo), concurrencia requerida, y flujo de simulación por ticks y la arquitectura de goroutines. |
