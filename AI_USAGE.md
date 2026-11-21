@@ -1,7 +1,6 @@
 # Registro de Uso de Inteligencia Artificial
 
 **Proyecto:** Simulador de Operaciones Mineras (ICI425 - Cruces, Díaz, Pino)
-**Repositorio:** https://github.com/usuario/ici425-cruces-diaz-pino (actualizar con URL real)
 **Fecha de creación:** 2026-11-21
 
 ---
