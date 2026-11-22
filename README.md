@@ -1,5 +1,3 @@
-# Simulador de Mina - ICI425 Certamen II
-
 ### Integrantes
 
 | Nombre y Apellido | Correo Electrónico |
