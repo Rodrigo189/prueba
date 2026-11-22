@@ -14,7 +14,7 @@
 
 ### Compilación y Ejecución
 
-El proyecto usa Go 1.27+ e incluye un **Makefile** con targets convenientes.
+El proyecto usa Go y incluye un **Makefile** con targets convenientes.
 
 ```bash
 # Compilar (genera binario ./simulador/sim)
@@ -49,21 +49,6 @@ make clean              # Limpia binario y logs/
 | `-falla_tramo` | string | "" | ID del tramo a fallar (ej. `T1`, `R1`) |
 | `-falla_tick` | int | 5 | Tick donde inicia la falla |
 | `-falla_duracion` | int | 3 | Duración de la falla en ticks (0 = permanente) |
-
-### Formato del Archivo de Mina (`mina.txt`)
-
-```txt
-# NODO <id> <tipo> [capacidad]
-# TRAMO <id> <origen> <destino> <tipo> <tiempo>
-
-NODO E1 entrada
-NODO P1 pala 2
-NODO P2 pala 1
-NODO S1 stockpile 2
-
-TRAMO T1 E1 P1 Doble 4
-TRAMO R1 P1 S1 Rampa 2
-```
 
 - **Tipos de nodo**: `entrada`, `pala`, `stockpile`
 - **Tipos de tramo**: `Doble` (ida y vuelta), `Rampa` (sentido único)
@@ -107,14 +92,14 @@ TRAMO R1 P1 S1 Rampa 2
 - **Colas FIFO estrictas**: En `TramoSimulacion.Cola`, `Pala.Cola` (canal), `Stockpile.Cola` (slice). `agregarACola` evita duplicados.
 - **Protocolo de rampa**:
   - **Ingenuo**: Camión entra si sentido coincide o rampa libre; si no, encola. Puede provocar deadlock circular.
-  - **Prevención**: En sentido `Ida` (hacia pala), **reserva atómica** de cupo en pala **antes** de entrar a la rampa (`select` con `default` en `palaLugares`). Si pala llena, no entra → rompe **espera circular** (Condición de Coffman #4).
+  - **Prevención**: En sentido `Ida` (hacia pala), **reserva atómica** de cupo en pala **antes** de entrar a la rampa (`select` con `default` en `palaLugares`). Si pala llena, no entra → rompe **espera** (Condición de Coffman #4).
 - **Fallas**: `Tramo.EnFalla` (bool protegido por mutex del tramo). Planificador BFS omite tramos en falla. Inyector de fallas activar/desactiva según `falla_tick` y `falla_duracion` (0 = permanente).
 - **Esperas prolongadas**: Si camión espera `timeout_recurso` ticks sin adquirir recurso, registra `ESPERA_PROLONGADA` y sigue esperando (recursión tail en `esperarRecurso`).
 - **Modelo de tiempo**: Tiempo discreto por ticks. `Reloj` con `delta` (ej. 20 ms). Un tick real = `delta` de wall-clock. `time.Sleep(ticks * delta)` simula desplazamiento. `reloj.Tick()` devuelve tick entero actual.
 
 ---
 
-## 3. Especificación del Formato de los Logs (Entregable H1)
+## 3. Especificación del Formato de los Logs
 
 ### Archivos Generados
 
@@ -190,7 +175,7 @@ for i := 0; i < len(destinos); i++ {
 1. **Equidad**: Distribuye carga entre palas/stockpiles disponibles.
 2. **Tolerancia a fallas**: BFS (`planificadorReal.Ruta`) omite tramos con `EnFalla=true`. Si un destino no tiene ruta, se prueba el siguiente en orden round-robin.
 3. **Simplicidad**: No requiere estado compartido complejo; solo contador `sigPala`/`sigStockpile` por despachador.
-4. **Reintentos implícitos**: Camión que recibe `SIN_DESTINO` vuelve a `ESPERANDO` y re-solicita en siguiente tick (ver `camionReal`: `solicitarDemo` devuelve `Listo=false` → camión vuelve al loop).
+4. **Reintentos implícitos**: Camión que recibe `SIN_DESTINO` vuelve a `ESPERANDO` y re-solicita en siguiente tick (ver `camionReal`: `solicitarDemo` devuelve `Listo=false`, camión vuelve al loop).
 
 ### Reintentos cuando no hay destino alcanzable
 
@@ -224,51 +209,19 @@ if protocolo == "prevencion" && t.Tipo == TipoRampa && sentidoDeseado == "Ida" &
 ```
 
 - **Reserva atómica**: `select` con `default` en canal bufferizado `palaLugares` (semáforo). Si hay cupo, lo toma **instantáneamente**; si no, **no entra a la rampa**.
-- **Por qué es atómico**: Operación única de hardware (CAS en canal Go). No hay ventana entre "verificar cupo" y "tomar cupo".
 - **Resultado**: Camión en rampa `Ida` **garantiza** tener cupo en pala al llegar. No puede haber camión en rampa esperando pala llena → **no se forma ciclo de espera**.
-
-### Protocolo `ingenuo`: Deadlock por Espera Circular
-
-En `tramo.go` sin la reserva previa:
-1. Camión C1 entra a rampa R1 (sentido `Ida` hacia pala P1).
-2. Camión C2 entra a rampa R2 (sentido `Ida` hacia pala P2).
-3. Pala P1 llena (capacidad 1), C1 espera en R1.
-4. Pala P2 llena, C2 espera en R2.
-5. C1 retiene R1 y espera P1; C2 retiene R2 y espera P2.
-6. Si P1 y P2 son el mismo recurso o hay dependencia circular → **deadlock**.
-
-**Evidencia en logs**: Múltiples `ADQUIERE_TRAMO` en rampas `Ida` seguidos de `ESPERA_PROLONGADA` en mismas rampas, sin `FIN_CARGA` correspondiente.
 
 ### Falla Permanente: Bloqueo Indefinido (NO Deadlock)
 
 Cuando un tramo entra en falla permanente (`falla_duracion=0`):
 - Planificador BFS **omite** el tramo (`if t.EnFalla { continue }` en `main.go:179`).
-- Camiones detrás de la falla reciben `SIN_DESTINO` → reintentan indefinidamente.
+- Camiones detrás de la falla reciben `SIN_DESTINO`, reintentan indefinidamente.
 - **No hay deadlock** porque:
   - No retienen recursos esperando otros (no hay **retención y espera**).
-  - No hay ciclo de espera: camiones simplemente no tienen ruta → **condición #2 rota**.
+  - No hay ciclo de espera: camiones simplemente no tienen ruta, **condición #2 rota**.
   - Es **starvation/bloqueo indefinido** por topología, no deadlock por contención de recursos.
 
 ---
-
-## 6. Contenidos de la Unidad (con Referencias a Código)
-
-### 6.1 Nombres, Ámbitos y Ligado
-
-**Tabla de Tiempos de Ligado (≥6)**
-
-| Entidad / Símbolo | Tiempo de Ligado | Explicación | Archivo:Línea |
-|-------------------|------------------|-------------|---------------|
-| `Reloj` (struct) | Compilación | Tipo definido en paquete `main` | `main.go:15` |
-| `NuevoReloj` (func) | Compilación | Función de paquete | `main.go:20` |
-| `Despachador.solicitudes` (campo) | Instanciación (run-time) | `make(chan Solicitud, 64)` en `NuevoDespachador` | `despachador.go:39` |
-| `Pala.Lugares` (campo) | Instanciación | `make(chan struct{}, cap)` en `NuevaPala` | `pala.go:33` |
-| `seqGlobal` (variable global) | Carga de programa | `var seqGlobal uint64` inicializada a 0 | `logs.go:13` |
-| `Logger.Registrar` (método) | Compilación | Ligado estático a tipo `Logger` | `logs.go:51` |
-| `TramoSimulacion.IntentarEntrar` | Compilación | Método con receiver `(t *TramoSimulacion)` | `tramo.go:52` |
-| `camionReal` (closure/func) | Instanciación (por camión) | Goroutine creada en loop `main.go:476` | `main.go:289` |
-| `planificadorReal.Ruta` | Compilación | Implementa interfaz `Planificador` | `main.go:168` |
-| `GrafoMina.Nodos` (mapa) | Instanciación | `make(map[string]*Nodo)` en `CargarMina` | `mina.go:54` |
 
 **Tabla de Símbolos (Package `main`)**
 
@@ -276,13 +229,13 @@ Go usa una **tabla de símbolos por paquete** (no por archivo). Todos los archiv
 - Tipos: `Reloj`, `EstadoCamion`, `Instantanea`, `TablaEstado`, `Mina`, `Planificador`, `Solicitud`, `Asignacion`, `Despachador`, `SolicitudPala`, `Pala`, `SolicitudStockpile`, `Stockpile`, `TramoSimulacion`, `Tramo`, `GrafoMina`, `Nodo`, `Camion`, `Visualizador`, `Logger`.
 - Funciones: `NuevoReloj`, `NuevoDespachador`, `NuevaPala`, `NuevoStockpile`, `NuevoTramo`, `CargarMina`, `NuevoLogger`, `NuevoVisualizador`, `lognormal`, `esperar`, `esperarRecurso`, `solicitarDemo`, `main`.
 
-**Ocultamiento (Information Hiding)**
+**Ocultamiento**
 
 - **No hay ocultamiento fuerte** en Go sin paquetes separados. Todo está en `package main`.
-- **Convención**: Campos no exportados (minúscula) usados internamente: `TramoSimulacion.mu`, `TramoSimulacion.Cola`, `Pala.mu`, `Pala.esperando`, `Stockpile.mu`, `Stockpile.Cola`, `Despachador.sigPala`, `Logger.archivo`, `Logger.w`.
+- **Convención**: Campos no exportados (minuscula) usados internamente: `TramoSimulacion.mu`, `TramoSimulacion.Cola`, `Pala.mu`, `Pala.esperando`, `Stockpile.mu`, `Stockpile.Cola`, `Despachador.sigPala`, `Logger.archivo`, `Logger.w`.
 - **Interfaces** (`Mina`, `Planificador`) ocultan implementación concreta (`GrafoMina`, `planificadorReal`) del despachador.
 
-### 6.2 Control de Flujo
+### Control de Flujo
 
 #### `defer` / `recover` con Panic Controlado
 
@@ -377,34 +330,6 @@ if len(t.Cola) > 0 && t.Cola[0] == idCamion {  // Cortocircuito: len>0 primero
 ```
 - `len(t.Cola) > 0` evita `t.Cola[0]` panic en slice vacío.
 
-### 6.3 Concurrencia: Análisis de `GOMAXPROCS`
-
-**Modelo**: Go usa **goroutines** (hilos de usuario) multiplexados sobre **P** (procesadores lógicos) que corren en **M** (hilos de kernel). `GOMAXPROCS` = nº de P (default = nº de CPUs).
-
-**Tabla: Tiempo de Ejecución vs GOMAXPROCS** (simulación 100 ticks, 5 camiones, delta=10ms)
-
-| GOMAXPROCS | Tiempo Real (s) | Speedup | Notas |
-|------------|-----------------|---------|-------|
-| 1 | ~1.05 | 1.00x | Secuencial; todo en 1 hilo kernel |
-| 2 | ~0.58 | 1.81x | Paralelismo real en 2 cores |
-| 4 | ~0.35 | 3.00x | Cerca de lineal (I/O en logs + CPU) |
-| 8 | ~0.32 | 3.28x | Rendimientos decrecientes (contención mutex, sincronización) |
-
-**Explicación con Modelo Goroutines-Hilos Kernel**:
-
-1. **Goroutines activas**: 1 Despachador + 1 Visualizador + N Palas + M Stockpiles + K Camiones + 1 Falla + 1 main ≈ 15-20 goroutines.
-2. **Naturaleza de la carga**: Mezcla de **CPU** (BFS planificador, lógica FIFO, muestreo lognormal) e **I/O** (escritura logs `Flush()` cada evento, `time.Sleep` por ticks).
-3. **Con GOMAXPROCS=1**: Todas las goroutines corren en 1 hilo kernel (M=1, P=1). El scheduler Go hace context-switch cooperativo en puntos de `select`, `chan`, `time.Sleep`, `mutex`. **No hay paralelismo real**; tiempo ≈ ticks × delta + overhead.
-4. **Con GOMAXPROCS=N>1**: Hasta N goroutines corren **simultáneamente** en N hilos kernel.
-   - Planificador (BFS) y camiones (cálculo rutas, esperas) pueden correr en paralelo.
-   - **Contención**: `TablaEstado.mu`, `TramoSimulacion.mu`, `Stockpile.mu`, `Pala.mu`, `seqGlobal` (atómico, sin lock).
-   - **Escalabilidad limitada** por secciones críticas cortas pero frecuentes (cada evento loguea → `atomic.AddUint64` + `mutex` tabla + `mutex` tramo).
-5. **Ley de Amdahl**: Fracción serial ≈ sincronización + I/O logs. Speedup máx. ≈ 3-4x en 8 cores típico para esta carga.
-
-**Conclusión**: `GOMAXPROCS=4` es punto dulce. Más no ayuda por contención de mutex y I/O serializado en `Logger.Flush()`.
-
----
-
 ## Ejecución Rápida de Prueba
 
 ```bash
@@ -418,24 +343,3 @@ make run-ingenuo        # Protocolo ingenuo con mina de deadlock (esperado deadl
 make build
 ./simulador/sim -camiones 5 -ticks 100 -delta 50 -mina simulador/mina.txt -protocolo prevencion -timeout_recurso 10
 ```
-
-**Salida esperada**: Logs en `logs/*.csv`, visualizador en consola, resumen final:
-```
-Fin del turno: 12 descargas (~3972 toneladas)
-```
-
-### Targets del Makefile Disponibles
-
-| Target | Descripción |
-|--------|-------------|
-| `make build` | Compila el binario `simulador/sim` |
-| `make run` | Ejecuta configuración base sin fallas |
-| `make run-fallas-temp` | Ejecuta con falla temporal en tramo T1 |
-| `make run-fallas-perm` | Ejecuta con falla permanente en tramo T1 |
-| `make run-ingenuo` | Ejecuta protocolo ingenuo (deadlock) |
-| `make test` | Ejecuta tests unitarios (`go test -v`) |
-| `make race` | Tests + ejecución con detector de carreras (`-race`) |
-| `make fmt` | Formatea código (`go fmt`) |
-| `make vet` | Análisis estático (`go vet`) |
-| `make clean` | Elimina binario y directorio `logs/` |
-| `make help` | Muestra esta tabla de targets |
